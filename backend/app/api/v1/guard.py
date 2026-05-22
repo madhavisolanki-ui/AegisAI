@@ -186,7 +186,7 @@ def get_guard_history(
 
 
 # Temporary in-memory config store
-user_guard_configs = {}
+user_guard_configs: dict[int, dict[str, float | str]] = {}
 
 VALID_SANITIZATION_LEVELS = {"low", "medium", "high"}
 
@@ -248,11 +248,12 @@ def update_guard_config(
 class BulkScanRequest(BaseModel):
     prompts: list[str]
 
-    def validate_prompts(self):
+    def validate_prompts(self) -> None:
         if len(self.prompts) > 50:
-            raise ValueError("Maximum 50 prompts allowed per batch request.")
-        return self
-
+            raise ValueError(
+                "Maximum 50 prompts allowed per batch request."
+            )
+    
 
 class BulkScanResponse(BaseModel):
     results: list[ScanResponse]
@@ -274,10 +275,14 @@ def bulk_scan_prompts(
     Each prompt counts as one rate-limit unit and produces
     one GuardScanLog row, consistent with POST /scan.
     """
-    if len(request.prompts) > 50:
+
+    try:
+        # Schema validation instead of manual check
+        request.validate_prompts()
+    except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Maximum 50 prompts allowed per batch request."
+            detail=str(e),
         )
 
     # CHECK RATE LIMIT FOR THE WHOLE BATCH UPFRONT        
