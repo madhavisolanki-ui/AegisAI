@@ -97,6 +97,56 @@ Then `docker compose up -d`. See [Getting Started](docs/getting-started.md) for 
 
 ---
 
+## ⚙️ Environment Variables Configuration
+
+The application requires several environment variables for application behavior, database connectivity, authentication, payment processing, and LLM providers. Copy the `backend/.env.example` file to create your `backend/.env` file and configure the following variables:
+
+### 📱 Core Application & Database
+| Variable Name | Description | Required / Optional | Default / Example Value |
+| :--- | :--- | :--- | :--- |
+| `APP_NAME` | The name of the application. | Optional | `AegisAI` |
+| `DEBUG` | Toggles debug mode for detailed error logs. | Optional | `true` |
+| `API_V1_PREFIX` | Base routing prefix for version 1 of the API endpoints. | Optional | `/api/v1` |
+| `DATABASE_URL` | PostgreSQL connection string used by the backend. | **Required** | `postgresql://postgres:postgres@localhost:5432/aegisai_db` |
+
+### 🔒 Authentication
+| Variable Name | Description | Required / Optional | Default / Example Value |
+| :--- | :--- | :--- | :--- |
+| `SECRET_KEY` | Secret key used to sign and verify JSON Web Tokens. | **Required** | *Generate via:* `openssl rand -hex 32` |
+| `ALGORITHM` | Algorithm used for JWT encryption. | Optional | `HS256` |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | Token expiration duration in minutes. | Optional | `30` |
+
+### 💳 Stripe Integration (Billing)
+| Variable Name | Description | Required / Optional | Default / Example Value |
+| :--- | :--- | :--- | :--- |
+| `STRIPE_SECRET_KEY` | Secret key for Stripe API authentication. | Optional (Leave blank to disable billing) | `sk_test_...` |
+| `STRIPE_PUBLISHABLE_KEY` | Public key used on the frontend client for Stripe. | Optional | `pk_test_...` |
+| `STRIPE_WEBHOOK_SECRET` | Secret key used to validate incoming Stripe webhook events. | Optional | `whsec_...` |
+| `STRIPE_PRICE_STARTER` / `GROWTH` / `SCALE` | Price IDs mapped to specific subscription tiers in Stripe. | Optional | `price_...` |
+
+### 🤖 LLM Provider (OpenAI-compatible)
+| Variable Name | Description | Required / Optional | Default / Example Value |
+| :--- | :--- | :--- | :--- |
+| `LLM_API_KEY` | API Key for your LLM provider. Set to `ollama` for local setups. | **Required** | `sk-...` or `gsk_...` or `ollama` |
+| `LLM_BASE_URL` | Base endpoint URL for the LLM provider. Leave empty for OpenAI. | Optional | `http://localhost:11434/v1` (Ollama) |
+| `LLM_MODEL` | Specific model name deployed or targeted by the backend. | **Required** | `gpt-4o-mini`, `llama3.2`, or `llama-3.3-70b-versatile` |
+
+### 🛡️ Module 2 & 3 Configurations (Guard & RAG)
+| Variable Name | Description | Required / Optional | Default / Example Value |
+| :--- | :--- | :--- | :--- |
+| `GUARD_SANITIZATION_LEVEL`| Strictness setting for prompt sanitization. | Optional | `medium` |
+| `GUARD_MAX_PROMPT_LENGTH` | Maximum allowed character length for a prompt. | Optional | `2000` |
+| `S3_BUCKET_NAME` | AWS S3 Bucket Name for cloud asset storage. | Optional | `my-aegisai-bucket` |
+| `FAISS_INDEX_PATH` | Local directory path where the FAISS index is saved. | Optional | `faiss_index` |
+| `RAG_CHUNK_SIZE` | Maximum token/character length for text chunks. | Optional | `1000` |
+| `RAG_CHUNK_OVERLAP` | Overlapping token/character footprint between chunks. | Optional | `200` |
+
+### 📊 MLflow Tracking
+| Variable Name | Description | Required / Optional | Default / Example Value |
+| :--- | :--- | :--- | :--- |
+| `MLFLOW_TRACKING_URI` | Destination server URI for tracking RAG query evaluations. | Optional (Defaults locally to `./mlruns`) | `http://localhost:5000` |
+
+---
 ## 📓 Colab Notebooks
 
 If you want to train the machine learning models yourself, you can run our official Google Colab notebooks on a free T4 GPU:
