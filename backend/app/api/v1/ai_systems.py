@@ -1,10 +1,11 @@
+from typing import Any, List, Optional
+from uuid import UUID
+import csv
+import io
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import asc, desc
 from sqlalchemy.orm import Session
-from typing import List, Optional
-import csv
-import io
 
 from app.core.database import get_db
 from app.core.security import get_current_user
@@ -13,36 +14,35 @@ from app.models.ai_system import AISystem
 from app.models.audit_log import AISystemAuditLog
 from app.schemas.ai_system import (
     AISystemCreate,
-    AISystemUpdate,
     AISystemResponse,
+    AISystemUpdate,
     BulkImportResponse,
     ComplianceStatusUpdateSchema,
 )
 from app.schemas.audit_log import AISystemAuditLogResponse
 from app.schemas.pagination import PaginatedResponse
+from app.modules.grc import ai_system_service
 
 router = APIRouter()
 
-
 @router.post("/", response_model=AISystemResponse, status_code=status.HTTP_201_CREATED)
-def create_ai_system(
-    system_data: AISystemCreate,
+def register_ai_system(
+    payload: AISystemCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Create a new AI system for compliance tracking."""
-    ai_system = AISystem(
-        owner_id=current_user.id,
-        name=system_data.name,
-        description=system_data.description,
-        version=system_data.version,
-        use_case=system_data.use_case,
-        sector=system_data.sector,
-    )
-    db.add(ai_system)
-    db.commit()
-    db.refresh(ai_system)
-    return ai_system
+    current_user: User = Depends(get_current_user)
+) -> Any:
+    """
+    Register a new AI system in the GRC platform.
+
+    Args:
+        payload (AISystemCreate): The schema containing details of the AI system to register.
+        db (Session): The database session dependency.
+        current_user (User): The currently authenticated user.
+
+    Returns:
+        AISystemResponse: The created AI system database record.
+    """
+    return ai_system_service.create_system(db=db, system_in=payload, owner_id=current_user.id)
 
 
 _SORTABLE_FIELDS = {
@@ -61,8 +61,21 @@ def list_ai_systems(
     limit: int = Query(50, ge=1, le=100, description="Items per page"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
-    """List all AI systems for the current user, with optional sorting and pagination."""
+) -> Any:
+    """
+    Retrieve a paginated and optionally sorted list of registered AI systems.
+
+    Args:
+        sort_by (Optional[str]): Field name to sort the results by.
+        order (Optional[str]): Direction of sorting ('asc' or 'desc').
+        page (int): Active page number for data chunking.
+        limit (int): Total number of records per page.
+        db (Session): The database session dependency.
+        current_user (User): The currently authenticated user.
+
+    Returns:
+        PaginatedResponse[AISystemResponse]: Wrapped list of systems with metadata.
+    """
     if sort_by not in _SORTABLE_FIELDS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -96,8 +109,18 @@ def bulk_import_systems(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
-):
-    """Import AI systems from a CSV file."""
+) -> Any:
+    """
+    Import multiple AI systems concurrently from an uploaded CSV spreadsheet file.
+
+    Args:
+        file (UploadFile): The raw multi-part form uploaded CSV file.
+        db (Session): The database session dependency.
+        current_user (User): The currently authenticated user.
+
+    Returns:
+        BulkImportResponse: Report consisting of creation count and a dictionary array of row validation errors.
+    """
     errors = []
     created_count = 0
 
@@ -179,8 +202,18 @@ def export_ai_systems(
     risk_level: Optional[str] = Query(None, description="Filter by risk level: minimal, limited, high, unacceptable"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
-    """Export the authenticated user's AI systems registry as a CSV file."""
+) -> StreamingResponse:
+    """
+    Export the authenticated user's AI systems registry as a downloadable CSV document stream.
+
+    Args:
+        risk_level (Optional[str]): Optional categorization filter parameter.
+        db (Session): The database session dependency.
+        current_user (User): The currently authenticated user.
+
+    Returns:
+        StreamingResponse: Text/csv file download response.
+    """
     query = db.query(AISystem).filter(AISystem.owner_id == current_user.id)
 
     if risk_level is not None:
@@ -222,28 +255,35 @@ def export_ai_systems(
     )
 
 
-@router.get(
-    "/{system_id}/history",
-    response_model=PaginatedResponse[AISystemAuditLogResponse],
-)
+@router.get("/{system_id}/history", response_model=PaginatedResponse[AISystemAuditLogResponse])
 def get_ai_system_history(
-    system_id: int,
+    system_id: UUID,
     order: Optional[str] = Query("desc", description="Sort direction for changed_at: asc, desc"),
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
     limit: int = Query(20, ge=1, le=100, description="Items per page"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
-    """Get paginated and sorted audit history for a specific AI system."""
-    
-    # 1. Validate sorting parameter
+) -> Any:
+    """
+    Get paginated and sorted sequential change history records for an internal audit log trail.
+
+    Args:
+        system_id (UUID): The targeted system identifier.
+        order (Optional[str]): Operational sorting direction for the timestamp field.
+        page (int): Chunk counter identifier.
+        limit (int): System ceiling constraint for array returns.
+        db (Session): The database session dependency.
+        current_user (User): The currently authenticated user.
+
+    Returns:
+        PaginatedResponse[AISystemAuditLogResponse]: Object wrapper encapsulating raw row structures.
+    """
     if order not in ("asc", "desc"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid order parameter. Use 'asc' or 'desc'.",
         )
 
-    # 2. Verify AI system exists and belongs to the authenticated user
     system = (
         db.query(AISystem)
         .filter(
@@ -259,19 +299,14 @@ def get_ai_system_history(
             detail="AI system not found",
         )
 
-    # 3. Build the base audit log query
     base_query = (
         db.query(AISystemAuditLog)
         .filter(AISystemAuditLog.ai_system_id == system_id)
     )
 
-    # 4. Calculate total records for pagination
     total = base_query.count()
-
-    # 5. Apply dynamic sorting based on input
     direction = asc(AISystemAuditLog.changed_at) if order == "asc" else desc(AISystemAuditLog.changed_at)
 
-    # 6. Apply pagination and execute
     logs = (
         base_query
         .order_by(direction)
@@ -290,44 +325,57 @@ def get_ai_system_history(
 
 @router.get("/{system_id}", response_model=AISystemResponse)
 def get_ai_system(
-    system_id: int,
+    system_id: UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Get a specific AI system."""
-    system = (
-        db.query(AISystem)
-        .filter(AISystem.id == system_id, AISystem.owner_id == current_user.id)
-        .first()
-    )
+    current_user: User = Depends(get_current_user)
+) -> Any:
+    """
+    Get the detailed profile of a specific AI system by its ID.
 
-    if not system:
+    Args:
+        system_id (UUID): The unique identifier of the AI system.
+        db (Session): The database session dependency.
+        current_user (User): The currently authenticated user.
+
+    Returns:
+        AISystemResponse: The AI system details if found.
+    """
+    system = ai_system_service.get_system(db=db, system_id=system_id)
+    if not system or system.owner_id != current_user.id:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="AI system not found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="AI System not found"
         )
     return system
 
 
 @router.put("/{system_id}", response_model=AISystemResponse)
 def update_ai_system(
-    system_id: int,
-    system_data: AISystemUpdate,
+    system_id: UUID,
+    payload: AISystemUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Update an AI system."""
-    system = (
-        db.query(AISystem)
-        .filter(AISystem.id == system_id, AISystem.owner_id == current_user.id)
-        .first()
-    )
+    current_user: User = Depends(get_current_user)
+) -> Any:
+    """
+    Update an existing AI system's details or compliance metadata.
 
-    if not system:
+    Args:
+        system_id (UUID): The unique identifier of the AI system to update.
+        payload (AISystemUpdate): The fields to update.
+        db (Session): The database session dependency.
+        current_user (User): The currently authenticated user.
+
+    Returns:
+        AISystemResponse: The updated AI system database record.
+    """
+    system = ai_system_service.get_system(db=db, system_id=system_id)
+    if not system or system.owner_id != current_user.id:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="AI system not found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="AI System not found"
         )
-
-    update_data = system_data.model_dump(exclude_unset=True)
+    
+    update_data = payload.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(system, field, value)
     
@@ -339,40 +387,51 @@ def update_ai_system(
 
 @router.delete("/{system_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_ai_system(
-    system_id: int,
+    system_id: UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Delete an AI system."""
-    system = (
-        db.query(AISystem)
-        .filter(AISystem.id == system_id, AISystem.owner_id == current_user.id)
-        .first()
-    )
+    current_user: User = Depends(get_current_user)
+) -> None:
+    """
+    Delete an AI system from the registry.
 
-    if not system:
+    Args:
+        system_id (UUID): The unique identifier of the AI system to delete.
+        db (Session): The database session dependency.
+        current_user (User): The currently authenticated user.
+
+    Returns:
+        None
+    """
+    system = ai_system_service.get_system(db=db, system_id=system_id)
+    if not system or system.owner_id != current_user.id:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="AI system not found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="AI System not found"
         )
-
-    db.delete(system)
-    db.commit()
+    ai_system_service.delete_system(db=db, system_id=system_id)
 
 
 @router.patch("/{system_id}/status", response_model=AISystemResponse)
 def update_ai_system_status(
-    system_id: int,
+    system_id: UUID,
     payload: ComplianceStatusUpdateSchema,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-):
-    """Update only the compliance_status of an AI system."""
-    system = db.query(AISystem).filter(
-        AISystem.id == system_id,
-        AISystem.owner_id == current_user.id,
-    ).first()
+) -> Any:
+    """
+    Partially update only the operational compliance status state enumerator of a registered entity.
 
-    if not system:
+    Args:
+        system_id (UUID): Target system identifier mapping.
+        payload (ComplianceStatusUpdateSchema): Pydantic input body containing the targeted field status state.
+        db (Session): The database session dependency.
+        current_user (User): The currently authenticated user.
+
+    Returns:
+        AISystemResponse: The modified data entity row.
+    """
+    system = ai_system_service.get_system(db=db, system_id=system_id)
+    if not system or system.owner_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="AI system not found",
